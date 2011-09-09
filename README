@@ -1,0 +1,8 @@
+Geonres bot is a python daemon which finds artists on Last.fm, fetches their biographical information and extracts their geographical location from the information using Yahoo Placemaker API.
+
+The bot initializes as a daemon with the following command
+-	python bot.py start
+
+The bot is killed with the following command
+-	python bot.py stop
+
