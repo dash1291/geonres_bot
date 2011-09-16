@@ -130,7 +130,9 @@ def getArtistCountry(artist_name):
 	location_title=location[0].getElementsByTagName("title")[0].childNodes[0].nodeValue
 	for country in country_list:
 		if(string.find(location_title,country)!=-1):
-
+			if(country=='India'):
+				if(string.find(location_title,'Indiana')!=-1):
+					country='United States'
 			addArtist(artist_name,country,listeners)
 			break	
 	return
