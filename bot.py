@@ -1,144 +1,196 @@
-import urllib2
-import urllib
-import xml.dom.minidom
 import _mysql
+import os
+import signal
 import string
 import sys
-import os,signal
+import urllib
+import urllib2
+import xml.dom.minidom
+
 DOM=xml.dom.minidom
 URL=urllib2
 db=None
 country_list=[]
 logfile=None
+lastOffset = 0
+
+def get_lastOffset():
+    global lastOffset
+    f = open("lastOffset", 'r')
+    lastOffset = int(f.read())
+    f.close()
+
+def incr_lastOffset():
+    global lastOffset
+    f = open("lastOffset",'w')
+    lastOffset = lastOffset + 1
+    f.write(str(lastOffset))
+    f.close()
+    
 def exit_process():
-	pidfile=open('process.pid','r')
-	pid=int(pidfile.read())
-	pidfile.close()
-	os.kill(pid,signal.SIGKILL)
-	print 'killed '+str(pid)
-	os.remove('process.pid')
-	return 1
+    pidfile=open('process.pid','r')
+    pid=int(pidfile.read())
+    pidfile.close()
+    os.kill(pid,signal.SIGKILL)
+    print 'killed '+str(pid)
+    os.remove('process.pid')
+    return 1
+
 def get_process_state():
-	try:
-		pidfile=open('process.pid','r')
-		pid=int(pidfile.read())
-	except:
-		create_process(current_pid)
+    try:
+        pidfile = open('process.pid', 'r')
+        pid = int(pidfile.read())
+    except:
+        create_process(current_pid)
 	return 1
+
 def create_process():
-	global db
-	global logfile
-	s=os.fork()
-	if(s!=0):
-		sys.exit()
-	pid=os.getpid()
-	pidfile=open('process.pid','w')
-	pidfile.write(str(pid))
-	pidfile.close()	
-	logfile=open('log.txt','a')
-	db=_mysql.connect(host="hostname", user="username", passwd="password",db="geonres")
-	populateCountryList()
-	getSimilarArtists()
-	return 1
+    global logfile
+    s = os.fork()
+    if(s!=0):
+        sys.exit()
+    pid = os.getpid()
+    pidfile = open('process.pid', 'w')
+    pidfile.write(str(pid))
+    pidfile.close()	
+    connectDB()
+    return 1
+
+def connectDB():
+    global db, logfile
+    logfile = open('log.txt', 'a')
+    db = _mysql.connect(host="geonres.db.8046490.hostedresource.com",
+         user="geonres", passwd="Dubey@111", db="geonres")
+    populateCountryList()
+    try:
+        getArtistInformation()
+    except:
+        incr_lastOffset()
+        getArtistInformation()
+    return 1
+
 def populateCountryList():
-	file_contents=open("countries.xml").read()
-	xml=DOM.parseString(file_contents)
-	document=xml.documentElement
-	countries=document.getElementsByTagName("country");
-	count=countries.length	
+	file_contents = open("countries.xml").read()
+	xml = DOM.parseString(file_contents)
+	document = xml.documentElement
+	countries = document.getElementsByTagName("country");
+	count = countries.length	
 	for country in countries:
-		country_name=country.childNodes[0].nodeValue;
-		country_list.append(country_name)
+            country_name = country.childNodes[0].nodeValue;
+            country_list.append(country_name)
 	return
 
-def addArtist(artist,country,listeners):
+def addArtist(artist):
 	global db
 	global logfile
-	query="INSERT INTO artists (name, country, listeners) VALUES ('"+artist+"', '"+country+"', '"+listeners+"')"
+      	query = "SELECT * FROM artists WHERE name = '" + artist + "'"
 	db.query(query)
-	logfile.write('added '+artist+' from '+country+' listeners '+listeners)
-	return
-
-def getSimilarArtists():
-	global db
-	global logfile
-	f=open("lastOffset",'r')
-	lastOffset=int(f.read())
-	f.close()
-	query="SELECT * FROM artists ORDER BY ID"
-	db.query(query)
-	result=db.store_result()
-	row=result.fetch_row()
-	index=0
-	while(row):
-		artist_id=row[0][0]
-		artist_name=row[0][1]
-		logfile.write(artist_name)
-		if(index==lastOffset):
-			break
-		index=index+1
-		row=result.fetch_row()
-	data={'artist': artist_name}
-	data=urllib.urlencode(data)
-	url="http://ws.audioscrobbler.com/2.0/?method=artist.getsimilar&"+data+"&api_key=<api key here>"
-	file_contents=URL.urlopen(url).read()
-	xml=DOM.parseString(file_contents)
-	document=xml.documentElement
-	similar_artists=document.getElementsByTagName("artist")
-	for artist in similar_artists:
-		artist_name=artist.getElementsByTagName("name")[0].childNodes[0].nodeValue
-		try:
-			getArtistCountry(artist_name)
-		except:
-			logfile.write(str(sys.exc_info()[0]))
-			continue
-	f=open("lastOffset",'w')
-	lastOffset=lastOffset+1
-	f.write(str(lastOffset))
-	f.close()
-	#keep track of the artist index in the database
-	getSimilarArtists()
-	return
-
-def getArtistCountry(artist_name):
-	global db
-	query="SELECT * FROM artists WHERE name = '"+artist_name+"'"
-	db.query(query)
-	result=db.store_result()
-	row=result.fetch_row()
+	result = db.store_result()
+	row = result.fetch_row()
 	if(row):
-		return
-	if(len(artist_name)<1):
-		return
-	data={'artist': artist_name}
-	data=urllib.urlencode(data)
-	url="http://ws.audioscrobbler.com/2.0/?method=artist.getinfo&"+data+"&api_key=<api key here>"
-	file_contents=URL.urlopen(url).read()
-	xml=DOM.parseString(file_contents)
-	document=xml.documentElement
-	listeners=document.getElementsByTagName("listeners")[0].childNodes[0].nodeValue;
-	data={'documentContent':file_contents,'documentType':'text/plain','outputType':'rss','appid':'<app id here>'}
-	data=urllib.urlencode(data)
-	url="http://wherein.yahooapis.com/v1/document"
-	req=URL.Request(url,data)
-	response=URL.urlopen(req).read()
-	response_xml=DOM.parseString(response)
-	document=response_xml.documentElement
-	location=document.getElementsByTagName("item")
-	if(not location):
-		return
-	location_title=location[0].getElementsByTagName("title")[0].childNodes[0].nodeValue
-	for country in country_list:
-		if(string.find(location_title,country)!=-1):
-			if(country=='India'):
-				if(string.find(location_title,'Indiana')!=-1):
-					country='United States'
-			addArtist(artist_name,country,listeners)
-			break	
+	    return
+	if(len(artist)<1):
+	    return
+	query = "INSERT INTO artists (name, country, listeners) VALUES ('"
+        query = query + artist + "', '" + "notset" + "', '" + "0" + "')"
+	db.query(query)
+        log = 'added ' + artist
+        logfile.write(log)
 	return
-command=sys.argv[1]
+
+def updateArtist(artist, location, listeners):
+	global db
+	global logfile
+      	query = "UPDATE artists SET listeners='" + listeners + "', country='"
+        query = query + location + "' WHERE name='" + artist + "'"
+        db.query(query)
+        log = 'updated ' + artist + ' country ' + location + ' listeners '
+        log = log + listeners
+        logfile.write(log)
+	return
+
+def needs_update(artist):
+    global db
+    query = "SELECT * FROM artists WHERE name='" + artist + "'"
+    db.query(query)
+    result = db.store_result()
+    row = result.fetch_row()
+    if(row[0][2]=='notset'):
+        return True
+    else:
+        return False
+    
+def getArtistInformation():
+	global db, lastOffset
+        get_lastOffset()
+	query = "SELECT * FROM artists ORDER BY ID"
+	db.query(query)
+	result = db.store_result()
+	row = result.fetch_row()
+	index = 0
+	while(row):
+            artist_id = row[0][0]
+            artist_name = row[0][1]
+            if(index==lastOffset):
+                break
+            index = index + 1
+            row = result.fetch_row()
+
+	data = {'artist': artist_name}
+	data = urllib.urlencode(data)
+	url = "http://ws.audioscrobbler.com/2.0/?method=artist.getinfo&"
+        url = url + data + "&api_key=b25b959554ed76058ac220b7b2e0a026"
+	file_contents = URL.urlopen(url).read()
+	xml = DOM.parseString(file_contents)
+	document = xml.documentElement
+	listeners = document.getElementsByTagName("listeners")[0]
+        listener_count = listeners.childNodes[0].nodeValue
+
+        similar = document.getElementsByTagName('similar')[0]
+        similar_artists = similar.getElementsByTagName('artist')
+        for similar_artist in similar_artists:
+            similar_artist_name = similar_artist.getElementsByTagName('name')
+            try:
+                addArtist(similar_artist_name[0].childNodes[0].nodeValue)
+            except:
+                continue
+        
+        if(needs_update(artist_name)):
+            data = {'documentContent':file_contents, 'documentType':'text/plain',
+                   'outputType':'rss', 'appid':'cm5bOt7c'}
+	    data = urllib.urlencode(data)
+	    url = "http://wherein.yahooapis.com/v1/document"
+	    req = URL.Request(url, data)
+	    response = URL.urlopen(req).read()
+	    response_xml = DOM.parseString(response)
+	    document = response_xml.documentElement
+	    location = document.getElementsByTagName("item")
+	    if(not location):
+                return
+	    l = location[0].getElementsByTagName("title")[0]
+            location_title = l.childNodes[0].nodeValue
+	    for country in country_list:
+                if(string.find(location_title, country)!=-1):
+                    if(country=='India'):
+                        if(string.find(location_title, 'Indiana')!=-1):
+                            country = 'United States'
+                    updateArtist(artist_name, country, listener_count)
+	            break
+        
+        incr_lastOffset()
+        try:       
+	    getArtistInformation()
+        except:
+            incr_lastOffset()
+            getArtistInformation()
+    
+        return
+
+command = sys.argv[1]
 if command=='start':
-	create_process()
+    create_process()
 if command=='stop':
-	exit_process()
+    exit_process()
+if command=='nd':
+    connectDB()
 
